@@ -77,7 +77,14 @@ npm start
 
 The server starts on `http://localhost:3000` by default.
 
-## 📚 API Endpoints
+## � API Documentation
+
+Interactive API documentation is available via Swagger UI:
+
+- **Swagger UI**: `http://localhost:3000/docs`
+- **OpenAPI JSON**: `http://localhost:3000/docs.json`
+
+## �📚 API Endpoints
 
 ### Health Check
 ```
@@ -216,36 +223,48 @@ npm run test:watch
 ```
 sycamore-backend/
 ├── src/
-│   ├── config/           # Configuration files
-│   │   ├── database.js   # Sequelize CLI config
-│   │   └── index.ts      # Application config
+│   ├── config/           # App and database configuration
+│   │   ├── database.js   # Sequelize CLI config  
+│   │   ├── index.ts      # Environment variables
+│   │   └── swagger.ts    # OpenAPI specification
+│   ├── controllers/      # HTTP request handlers
+│   │   ├── index.ts      # Controller exports
+│   │   ├── interest.controller.ts
+│   │   ├── transfer.controller.ts
+│   │   └── wallet.controller.ts
 │   ├── database/
 │   │   ├── connection.ts # Sequelize connection
 │   │   ├── migrations/   # Database migrations
 │   │   └── seeders/      # Seed data
 │   ├── middleware/       # Express middleware
+│   │   ├── async.middleware.ts
 │   │   ├── error.middleware.ts
+│   │   ├── index.ts
 │   │   └── validation.middleware.ts
 │   ├── models/           # Sequelize models
+│   │   ├── index.ts
 │   │   ├── Wallet.ts
 │   │   ├── TransactionLog.ts
 │   │   ├── LedgerEntry.ts
 │   │   └── InterestAccrual.ts
-│   ├── routes/           # API routes
+│   ├── routes/           # API route definitions
+│   │   ├── index.ts
 │   │   ├── transfer.routes.ts
 │   │   ├── wallet.routes.ts
 │   │   └── interest.routes.ts
-│   ├── services/         # Business logic
+│   ├── services/         # Business logic layer
+│   │   ├── index.ts
 │   │   ├── transfer.service.ts
-│   │   └── interest.service.ts
-│   ├── tests/            # Jest test files
+│   │   ├── interest.service.ts
+│   │   └── wallet.service.ts
+│   ├── tests/            # Jest test suites
 │   │   ├── financial-math.test.ts
 │   │   ├── interest.service.test.ts
 │   │   └── transfer.service.test.ts
-│   ├── utils/            # Utilities
+│   ├── utils/            # Shared utilities
 │   │   ├── financial-math.ts
 │   │   └── redis.ts
-│   └── server.ts         # Express app entry
+│   └── server.ts         # Express application entry point
 ├── .env.example          # Environment template
 ├── jest.config.js        # Jest configuration
 ├── package.json
@@ -342,13 +361,25 @@ Interest calculations correctly handle:
 - `accrual_date` (DATE)
 - `is_applied` (BOOLEAN)
 
-## 🏗️ Architectural Choices
+## 🏗️ Architecture
 
-1. **Service Layer Pattern**: Business logic separated from routes
+The codebase follows a Controller → Service → Route pattern:
+
+- **Controllers** handle HTTP concerns (parsing requests, formatting responses)
+- **Services** encapsulate business logic and database operations  
+- **Routes** define endpoints and wire up middleware
+
+```
+Request → Route → Middleware → Controller → Service → Database
+```
+
+### Key Design Decisions
+
+1. **Service Layer Pattern**: Business logic separated from HTTP handling
 2. **Repository Pattern**: Database access through Sequelize models
-3. **Middleware Chain**: Validation and error handling as middleware
-4. **Singleton Services**: Single instance for transfer and interest services
-5. **Event Sourcing Ready**: Full transaction logs enable replay
+3. **Middleware Chain**: Validation and error handling as composable middleware
+4. **Singleton Services**: Single instance for stateless services
+5. **Event Sourcing Ready**: Full transaction logs enable replay and audit
 
 ## 📝 License
 
