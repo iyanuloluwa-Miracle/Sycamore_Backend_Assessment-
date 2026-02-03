@@ -7,7 +7,6 @@ import { EntryType } from '../models/LedgerEntry';
 import { FinancialMath } from '../utils/financial-math';
 import config from '../config';
 
-// Interest calculation result
 export interface InterestCalculationResult {
   walletId: string;
   principalAmount: string;
@@ -19,7 +18,6 @@ export interface InterestCalculationResult {
   accrualDate: string;
 }
 
-// Apply interest result
 export interface ApplyInterestResult {
   success: boolean;
   message: string;
@@ -29,8 +27,14 @@ export interface ApplyInterestResult {
 }
 
 /**
- * Interest Service
- * Handles daily interest calculation and accrual at 27.5% per annum
+ * Handles daily interest calculations at 27.5% per annum.
+ * 
+ * Interest is tracked in two phases:
+ * 1. Accrual: Recording what's owed (done daily)
+ * 2. Application: Actually adding it to the balance (done on demand)
+ * 
+ * This separation lets us show users their pending interest without
+ * constantly updating wallet balances.
  */
 export class InterestService {
   private readonly annualRate: number;
@@ -40,9 +44,9 @@ export class InterestService {
   }
 
   /**
-   * Calculate daily interest for a specific amount
-   * @param principal - Principal amount
-   * @param date - Date for calculation (affects leap year handling)
+   * Calculate one day's interest on a given principal.
+   * The date matters because leap years have 366 days, slightly
+   * reducing the daily rate.
    */
   calculateDailyInterest(principal: string | number, date: Date = new Date()): InterestCalculationResult {
     const year = date.getFullYear();
@@ -52,14 +56,13 @@ export class InterestService {
     const dailyRate = FinancialMath.calculateDailyRate(this.annualRate, daysInYear);
     const interestAmount = FinancialMath.calculateDailyInterest(principal, this.annualRate, daysInYear);
 
-    // Format date as YYYY-MM-DD
     const accrualDate = date.toISOString().split('T')[0];
 
     return {
       walletId: '',
       principalAmount: FinancialMath.toFixed(principal),
       interestAmount: FinancialMath.toFixed(interestAmount),
-      dailyRate: dailyRate.toFixed(10), // Higher precision for rate
+      dailyRate: dailyRate.toFixed(10),
       annualRate: this.annualRate.toString(),
       daysInYear,
       isLeapYear,
@@ -68,10 +71,8 @@ export class InterestService {
   }
 
   /**
-   * Calculate interest for multiple days
-   * @param principal - Principal amount
-   * @param days - Number of days
-   * @param startDate - Start date for calculation
+   * Calculate interest across multiple days. Useful for showing
+   * users what they'd earn over a period.
    */
   calculateInterestForDays(
     principal: string | number,
@@ -87,8 +88,6 @@ export class InterestService {
       const result = this.calculateDailyInterest(principal, currentDate);
       dailyBreakdown.push(result);
       totalInterest = totalInterest.plus(result.interestAmount);
-      
-      // Move to next day
       currentDate.setDate(currentDate.getDate() + 1);
     }
 
@@ -98,11 +97,6 @@ export class InterestService {
     };
   }
 
-  /**
-   * Calculate annual interest
-   * @param principal - Principal amount
-   * @param year - Year for calculation
-   */
   calculateAnnualInterest(principal: string | number, year: number = new Date().getFullYear()): string {
     const daysInYear = FinancialMath.getDaysInYear(year);
     const interest = FinancialMath.calculateInterestForDays(
@@ -115,9 +109,8 @@ export class InterestService {
   }
 
   /**
-   * Accrue daily interest for a wallet (record without applying)
-   * @param walletId - Wallet ID
-   * @param date - Date for accrual
+   * Record today's interest for a wallet without actually crediting it.
+   * Idempotent: running twice on the same day does nothing the second time.
    */
   async accrueInterestForWallet(
     walletId: string,
@@ -129,14 +122,14 @@ export class InterestService {
       return null;
     }
 
-    // Don't accrue interest on zero or negative balances
+    // No interest on zero or negative balances
     if (FinancialMath.isNegative(wallet.balance) || FinancialMath.isZero(wallet.balance)) {
       return null;
     }
 
     const accrualDate = date.toISOString().split('T')[0];
 
-    // Check if already accrued for this date
+    // Already accrued today? Return the existing record.
     const existing = await InterestAccrual.findOne({
       where: { walletId, accrualDate },
     });
@@ -174,8 +167,8 @@ export class InterestService {
   }
 
   /**
-   * Accrue daily interest for all active wallets
-   * @param date - Date for accrual
+   * Batch operation: accrue today's interest for all active wallets.
+   * Run this once daily, typically via cron.
    */
   async accrueInterestForAllWallets(date: Date = new Date()): Promise<InterestCalculationResult[]> {
     const wallets = await Wallet.findAll({
@@ -195,10 +188,8 @@ export class InterestService {
   }
 
   /**
-   * Apply accrued interest to wallet balances
-   * This credits the interest to the wallet and marks accruals as applied
-   * @param walletId - Optional wallet ID to apply for specific wallet
-   * @param date - Date of accruals to apply
+   * Credit all pending interest to wallet balances.
+   * Creates proper transaction logs and ledger entries for audit trail.
    */
   async applyAccruedInterest(walletId?: string, date?: Date): Promise<ApplyInterestResult> {
     const whereClause: Record<string, unknown> = { isApplied: false };
@@ -240,14 +231,12 @@ export class InterestService {
 
             if (!wallet) continue;
 
-            // Create idempotency key for interest credit
             const idempotencyKey = `interest:${accrual.walletId}:${accrual.accrualDate}`;
 
-            // Create transaction log
             const transactionLog = await TransactionLog.create(
               {
                 idempotencyKey,
-                fromWalletId: null, // Interest comes from system
+                fromWalletId: null,
                 toWalletId: accrual.walletId,
                 amount: accrual.interestAmount,
                 type: TransactionType.INTEREST,
@@ -264,16 +253,13 @@ export class InterestService {
               { transaction: t }
             );
 
-            // Calculate new balance
             const newBalance = FinancialMath.add(wallet.balance, accrual.interestAmount);
 
-            // Update wallet balance
             await wallet.update(
               { balance: newBalance.toFixed(4) },
               { transaction: t }
             );
 
-            // Create ledger entry
             await LedgerEntry.create(
               {
                 transactionLogId: transactionLog.id,
@@ -287,7 +273,6 @@ export class InterestService {
               { transaction: t }
             );
 
-            // Update transaction log to completed
             await transactionLog.update(
               {
                 status: TransactionStatus.COMPLETED,
@@ -296,7 +281,6 @@ export class InterestService {
               { transaction: t }
             );
 
-            // Mark accrual as applied
             await accrual.update(
               {
                 isApplied: true,
@@ -340,12 +324,6 @@ export class InterestService {
     }
   }
 
-  /**
-   * Get interest history for a wallet
-   * @param walletId - Wallet ID
-   * @param limit - Number of records
-   * @param offset - Offset for pagination
-   */
   async getInterestHistory(
     walletId: string,
     limit: number = 30,
@@ -359,11 +337,6 @@ export class InterestService {
     });
   }
 
-  /**
-   * Get total accrued interest for a wallet
-   * @param walletId - Wallet ID
-   * @param applied - Filter by applied status
-   */
   async getTotalAccruedInterest(walletId: string, applied?: boolean): Promise<string> {
     const whereClause: Record<string, unknown> = { walletId };
     
@@ -382,8 +355,8 @@ export class InterestService {
   }
 
   /**
-   * Simulate interest over a period
-   * Useful for projections and testing
+   * Project how a balance would grow with daily compounding.
+   * Useful for showing users potential earnings.
    */
   simulateInterest(
     principal: string | number,

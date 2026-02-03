@@ -7,7 +7,6 @@ import { EntryType } from '../models/LedgerEntry';
 import { FinancialMath } from '../utils/financial-math';
 import redisClient from '../utils/redis';
 
-// Transfer request interface
 export interface TransferRequest {
   idempotencyKey: string;
   fromWalletId: string;
@@ -17,7 +16,6 @@ export interface TransferRequest {
   metadata?: Record<string, unknown>;
 }
 
-// Transfer result interface
 export interface TransferResult {
   success: boolean;
   transactionId?: string;
@@ -30,21 +28,32 @@ export interface TransferResult {
 }
 
 /**
- * Wallet Transfer Service
- * Handles idempotent money transfers with race condition prevention
+ * Handles wallet-to-wallet transfers with idempotency guarantees.
+ * 
+ * The tricky part here is preventing double-spends while still being
+ * resilient to network failures. We use a combination of Redis locks
+ * for distributed coordination and SERIALIZABLE transactions for
+ * database-level consistency.
  */
 export class TransferService {
-  private static readonly LOCK_TTL_MS = 10000; // 10 seconds lock timeout
-  private static readonly IDEMPOTENCY_TTL_SECONDS = 86400; // 24 hours
+  private static readonly LOCK_TTL_MS = 10000;
+  private static readonly IDEMPOTENCY_TTL_SECONDS = 86400; // 24h
 
   /**
-   * Execute an idempotent transfer between wallets
-   * Implements double-spending prevention and PENDING state logging
+   * Execute a transfer between two wallets.
+   * 
+   * The flow is intentionally verbose to ensure we can always recover
+   * to a known state if something fails mid-transfer:
+   * 
+   * 1. Check if we've seen this idempotency key before (fast path)
+   * 2. Acquire a distributed lock on the wallet pair
+   * 3. Create a PENDING transaction log (so we have a record even if we crash)
+   * 4. Move the money and update the ledger
+   * 5. Mark transaction COMPLETED and cache the result
    */
   async transfer(request: TransferRequest): Promise<TransferResult> {
     const { idempotencyKey, fromWalletId, toWalletId, amount, description, metadata } = request;
 
-    // Validate input
     const validationError = this.validateTransferRequest(request);
     if (validationError) {
       return {
@@ -55,14 +64,14 @@ export class TransferService {
       };
     }
 
-    // Step 1: Check idempotency - return cached result if exists
+    // Fast path: if we've processed this key before, return the cached result
     const cachedResult = await redisClient.getIdempotencyResult(idempotencyKey);
     if (cachedResult) {
       const parsed = JSON.parse(cachedResult) as TransferResult;
       return { ...parsed, isIdempotent: true };
     }
 
-    // Step 2: Check if transaction already exists in database (double-safety)
+    // Belt-and-suspenders: also check the database in case Redis was cleared
     const existingTransaction = await TransactionLog.findOne({
       where: { idempotencyKey },
     });
@@ -78,8 +87,7 @@ export class TransferService {
       return result;
     }
 
-    // Step 3: Acquire distributed lock to prevent race conditions
-    // Lock on both wallets to prevent concurrent modifications
+    // Sort wallet IDs to prevent deadlocks when locking
     const lockKey = `transfer:${[fromWalletId, toWalletId].sort().join(':')}`;
     const lockValue = await redisClient.acquireLock(lockKey, TransferService.LOCK_TTL_MS);
 
@@ -92,15 +100,14 @@ export class TransferService {
       };
     }
 
-    // Initialize transaction log variable for access in catch block
     let transactionLog: TransactionLog | undefined;
 
     try {
-      // Step 4: Execute transfer within a database transaction
       const result = await sequelize.transaction(
         { isolationLevel: Transaction.ISOLATION_LEVELS.SERIALIZABLE },
         async (t) => {
-          // 4.1: Create PENDING transaction log BEFORE any balance changes
+          // Create the transaction record first. If we crash after this point,
+          // at least we have evidence that something was attempted.
           transactionLog = await TransactionLog.create(
             {
               idempotencyKey,
@@ -115,7 +122,8 @@ export class TransferService {
             { transaction: t }
           );
 
-          // 4.2: Lock and fetch source wallet with FOR UPDATE
+          // Lock both wallets. Order doesn't matter here since we're in
+          // a SERIALIZABLE transaction, but we lock source first by convention.
           const fromWallet = await Wallet.findOne({
             where: { id: fromWalletId, isActive: true },
             lock: t.LOCK.UPDATE,
@@ -126,7 +134,6 @@ export class TransferService {
             throw new Error('Source wallet not found or inactive');
           }
 
-          // 4.3: Lock and fetch destination wallet with FOR UPDATE
           const toWallet = await Wallet.findOne({
             where: { id: toWalletId, isActive: true },
             lock: t.LOCK.UPDATE,
@@ -137,7 +144,7 @@ export class TransferService {
             throw new Error('Destination wallet not found or inactive');
           }
 
-          // 4.4: Check sufficient balance (prevent double-spending)
+          // Balance check — the whole point of all this locking
           const transferAmount = FinancialMath.decimal(amount);
           const currentBalance = FinancialMath.decimal(fromWallet.balance);
 
@@ -147,23 +154,20 @@ export class TransferService {
             );
           }
 
-          // 4.5: Calculate new balances using precise math
           const newFromBalance = FinancialMath.subtract(fromWallet.balance, amount);
           const newToBalance = FinancialMath.add(toWallet.balance, amount);
 
-          // 4.6: Update source wallet balance
           await fromWallet.update(
             { balance: newFromBalance.toFixed(4) },
             { transaction: t }
           );
 
-          // 4.7: Update destination wallet balance
           await toWallet.update(
             { balance: newToBalance.toFixed(4) },
             { transaction: t }
           );
 
-          // 4.8: Create ledger entries (double-entry bookkeeping)
+          // Double-entry bookkeeping: every transfer creates two ledger entries
           await LedgerEntry.bulkCreate(
             [
               {
@@ -188,7 +192,6 @@ export class TransferService {
             { transaction: t }
           );
 
-          // 4.9: Update transaction log to COMPLETED
           await transactionLog.update(
             {
               status: TransactionStatus.COMPLETED,
@@ -208,7 +211,7 @@ export class TransferService {
         }
       );
 
-      // Step 5: Cache successful result for idempotency
+      // Cache the result so subsequent retries are fast
       await redisClient.setIdempotencyResult(
         idempotencyKey,
         JSON.stringify(result),
@@ -218,10 +221,8 @@ export class TransferService {
       return result;
 
     } catch (error) {
-      // Handle transaction failure
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
 
-      // Update transaction log to FAILED if it was created
       if (transactionLog && transactionLog.id) {
         await TransactionLog.update(
           {
@@ -240,8 +241,7 @@ export class TransferService {
         error: errorMessage,
       };
 
-      // Cache failed result to prevent retry with same idempotency key
-      // causing inconsistent states
+      // Cache failures too — a failed transfer shouldn't succeed on retry
       await redisClient.setIdempotencyResult(
         idempotencyKey,
         JSON.stringify(failedResult),
@@ -251,14 +251,10 @@ export class TransferService {
       return failedResult;
 
     } finally {
-      // Always release the lock
       await redisClient.releaseLock(lockKey, lockValue);
     }
   }
 
-  /**
-   * Validate transfer request
-   */
   private validateTransferRequest(request: TransferRequest): string | null {
     const { idempotencyKey, fromWalletId, toWalletId, amount } = request;
 
@@ -291,9 +287,6 @@ export class TransferService {
     return null;
   }
 
-  /**
-   * Get transaction by idempotency key
-   */
   async getTransactionByIdempotencyKey(idempotencyKey: string): Promise<TransactionLog | null> {
     return TransactionLog.findOne({
       where: { idempotencyKey },
@@ -305,9 +298,6 @@ export class TransferService {
     });
   }
 
-  /**
-   * Get transaction by ID
-   */
   async getTransactionById(transactionId: string): Promise<TransactionLog | null> {
     return TransactionLog.findByPk(transactionId, {
       include: [
@@ -318,24 +308,15 @@ export class TransferService {
     });
   }
 
-  /**
-   * Get wallet balance
-   */
   async getWalletBalance(walletId: string): Promise<string | null> {
     const wallet = await Wallet.findByPk(walletId);
     return wallet?.balance || null;
   }
 
-  /**
-   * Get wallet by user ID
-   */
   async getWalletByUserId(userId: string): Promise<Wallet | null> {
     return Wallet.findOne({ where: { userId } });
   }
 
-  /**
-   * Get transaction history for a wallet
-   */
   async getTransactionHistory(
     walletId: string,
     limit: number = 50,
@@ -355,6 +336,5 @@ export class TransferService {
   }
 }
 
-// Export singleton instance
 export const transferService = new TransferService();
 export default transferService;
