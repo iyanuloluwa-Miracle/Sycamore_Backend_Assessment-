@@ -4,14 +4,10 @@ import { Wallet, TransactionLog, LedgerEntry } from '../models';
 import { transferService } from '../services';
 
 /**
- * Wallet Controller
- * Handles HTTP request/response for wallet operations
+ * HTTP handlers for wallet-related endpoints.
  */
 export class WalletController {
-  /**
-   * GET /api/wallets/:walletId
-   * Get wallet details
-   */
+
   async getWallet(req: Request, res: Response): Promise<void> {
     const { walletId } = req.params;
 
@@ -34,10 +30,6 @@ export class WalletController {
     });
   }
 
-  /**
-   * GET /api/wallets/:walletId/balance
-   * Get wallet balance
-   */
   async getBalance(req: Request, res: Response): Promise<void> {
     const { walletId } = req.params;
 
@@ -63,10 +55,6 @@ export class WalletController {
     });
   }
 
-  /**
-   * GET /api/wallets/:walletId/history
-   * Get transaction history with pagination
-   */
   async getHistory(req: Request, res: Response): Promise<void> {
     const { walletId } = req.params;
     const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
@@ -109,10 +97,6 @@ export class WalletController {
     });
   }
 
-  /**
-   * GET /api/wallets/:walletId/ledger
-   * Get ledger entries
-   */
   async getLedger(req: Request, res: Response): Promise<void> {
     const { walletId } = req.params;
     const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
@@ -160,10 +144,6 @@ export class WalletController {
     });
   }
 
-  /**
-   * GET /api/wallets/user/:userId
-   * Get wallet by user ID
-   */
   async getByUserId(req: Request, res: Response): Promise<void> {
     const { userId } = req.params;
 
@@ -186,10 +166,6 @@ export class WalletController {
     });
   }
 
-  /**
-   * POST /api/wallets
-   * Create a new wallet
-   */
   async createWallet(req: Request, res: Response): Promise<void> {
     const { userId, initialBalance = 0, currency = 'NGN' } = req.body;
 

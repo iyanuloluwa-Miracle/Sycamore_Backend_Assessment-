@@ -3,14 +3,12 @@ import { transferService } from '../services';
 import { TransactionStatus } from '../models/TransactionLog';
 
 /**
- * Transfer Controller
- * Handles HTTP request/response for transfer operations
+ * Handles HTTP layer for transfer operations.
+ * Business logic lives in TransferService; this just deals with
+ * parsing requests and formatting responses.
  */
 export class TransferController {
-  /**
-   * POST /api/transfer
-   * Execute an idempotent money transfer
-   */
+
   async createTransfer(req: Request, res: Response): Promise<void> {
     const { idempotencyKey, fromWalletId, toWalletId, amount, description, metadata } = req.body;
 
@@ -24,11 +22,13 @@ export class TransferController {
     });
 
     if (result.success) {
+      // 201 for new transfers, 200 for idempotent replays
       res.status(result.isIdempotent ? 200 : 201).json({
         success: true,
         data: result,
       });
     } else {
+      // 409 if another request is in progress, 400 otherwise
       const statusCode = result.error === 'CONCURRENT_REQUEST' ? 409 : 400;
       res.status(statusCode).json({
         success: false,
@@ -42,10 +42,6 @@ export class TransferController {
     }
   }
 
-  /**
-   * GET /api/transfer/:transactionId
-   * Get transaction by ID
-   */
   async getTransactionById(req: Request, res: Response): Promise<void> {
     const { transactionId } = req.params;
 
@@ -68,10 +64,6 @@ export class TransferController {
     });
   }
 
-  /**
-   * GET /api/transfer/idempotency/:key
-   * Get transaction by idempotency key
-   */
   async getTransactionByIdempotencyKey(req: Request, res: Response): Promise<void> {
     const { key } = req.params;
 

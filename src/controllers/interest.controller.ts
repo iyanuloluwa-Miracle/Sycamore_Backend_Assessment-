@@ -3,14 +3,10 @@ import { interestService } from '../services';
 import { InterestAccrual } from '../models';
 
 /**
- * Interest Controller
- * Handles HTTP request/response for interest operations
+ * HTTP handlers for interest calculations and accruals.
  */
 export class InterestController {
-  /**
-   * POST /api/interest/calculate
-   * Calculate daily interest preview
-   */
+
   async calculateDaily(req: Request, res: Response): Promise<void> {
     const { principal, date } = req.body;
 
@@ -46,10 +42,6 @@ export class InterestController {
     });
   }
 
-  /**
-   * POST /api/interest/calculate-period
-   * Calculate interest for a specific period
-   */
   async calculatePeriod(req: Request, res: Response): Promise<void> {
     const { principal, days, startDate } = req.body;
 
@@ -100,10 +92,6 @@ export class InterestController {
     });
   }
 
-  /**
-   * POST /api/interest/simulate
-   * Simulate compound interest
-   */
   async simulate(req: Request, res: Response): Promise<void> {
     const { principal, days, startDate } = req.body;
 
@@ -154,10 +142,6 @@ export class InterestController {
     });
   }
 
-  /**
-   * POST /api/interest/accrue/:walletId
-   * Accrue interest for a specific wallet
-   */
   async accrueForWallet(req: Request, res: Response): Promise<void> {
     const { walletId } = req.params;
     const { date } = req.body;
@@ -194,10 +178,6 @@ export class InterestController {
     });
   }
 
-  /**
-   * POST /api/interest/accrue-all
-   * Accrue interest for all wallets
-   */
   async accrueForAll(req: Request, res: Response): Promise<void> {
     const { date } = req.body;
 
@@ -226,10 +206,6 @@ export class InterestController {
     });
   }
 
-  /**
-   * POST /api/interest/apply
-   * Apply accrued interest to balances
-   */
   async applyInterest(req: Request, res: Response): Promise<void> {
     const { walletId, date } = req.body;
 
@@ -265,10 +241,6 @@ export class InterestController {
     });
   }
 
-  /**
-   * GET /api/interest/history/:walletId
-   * Get interest history for a wallet
-   */
   async getHistory(req: Request, res: Response): Promise<void> {
     const { walletId } = req.params;
     const limit = Math.min(parseInt(req.query.limit as string) || 30, 100);
@@ -291,10 +263,6 @@ export class InterestController {
     });
   }
 
-  /**
-   * GET /api/interest/total/:walletId
-   * Get total accrued interest
-   */
   async getTotalInterest(req: Request, res: Response): Promise<void> {
     const { walletId } = req.params;
     const applied = req.query.applied !== undefined
@@ -313,10 +281,6 @@ export class InterestController {
     });
   }
 
-  /**
-   * GET /api/interest/annual-projection
-   * Get annual interest projection
-   */
   async getAnnualProjection(req: Request, res: Response): Promise<void> {
     const { principal, year } = req.query;
 
