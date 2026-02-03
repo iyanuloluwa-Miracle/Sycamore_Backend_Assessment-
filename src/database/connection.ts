@@ -20,6 +20,12 @@ const sequelize = new Sequelize(
       timestamps: true,
       underscored: true,
     },
+    dialectOptions: {
+      ssl: {
+        require: true,
+        rejectUnauthorized: false
+      }
+    }
   }
 );
 
