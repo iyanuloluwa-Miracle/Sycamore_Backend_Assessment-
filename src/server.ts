@@ -1,25 +1,38 @@
 import express, { Application } from 'express';
 import dotenv from 'dotenv';
+import swaggerUi from 'swagger-ui-express';
 
-// Load environment variables
 dotenv.config();
 
 import config from './config';
+import { swaggerSpec } from './config/swagger';
 import sequelize from './database/connection';
 import routes from './routes';
 import { errorHandler, notFoundHandler } from './middleware';
 import redisClient from './utils/redis';
 
-// Import models to ensure associations are set up
+// Ensure model associations are initialized
 import './models';
 
 const app: Application = express();
 
-// Middleware
+// Core middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Request logging in development
+// Swagger documentation - available at /docs
+app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+  customCss: '.swagger-ui .topbar { display: none }',
+  customSiteTitle: 'Sycamore Wallet API Docs',
+}));
+
+// Serve raw OpenAPI spec for tooling integration
+app.get('/docs.json', (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.send(swaggerSpec);
+});
+
+// Development request logger
 if (config.nodeEnv === 'development') {
   app.use((req, res, next) => {
     console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
@@ -27,14 +40,15 @@ if (config.nodeEnv === 'development') {
   });
 }
 
-// API Routes
+// Mount API routes
 app.use('/api', routes);
 
-// Root endpoint
+// Landing page with quick reference
 app.get('/', (req, res) => {
   res.json({
-    message: 'Sycamore Backend Assessment API',
+    name: 'Sycamore Wallet API',
     version: '1.0.0',
+    documentation: '/docs',
     endpoints: {
       health: '/api/health',
       transfer: '/api/transfer',
@@ -44,53 +58,45 @@ app.get('/', (req, res) => {
   });
 });
 
-// Error handlers
+// Catch-all handlers
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-// Start server
 async function startServer(): Promise<void> {
   try {
-    // Test database connection
     await sequelize.authenticate();
-    console.log('✅ Database connection established');
+    console.log('✅ Database connected');
 
-    // Connect to Redis
+    // Redis is optional - the app degrades gracefully without it
     try {
       await redisClient.connect();
     } catch (redisError) {
-      console.warn('⚠️ Redis connection failed, continuing without distributed locking');
+      console.warn('⚠️  Redis unavailable – distributed locking disabled');
     }
 
-    // Start Express server
     app.listen(config.port, () => {
-      console.log(`🚀 Server running on port ${config.port}`);
-      console.log(`📍 Environment: ${config.nodeEnv}`);
-      console.log(`💰 Interest Rate: ${config.annualInterestRate * 100}% per annum`);
+      console.log(`🚀 Server running on http://localhost:${config.port}`);
+      console.log(`📚 API docs at http://localhost:${config.port}/docs`);
+      console.log(`💰 Interest rate: ${config.annualInterestRate * 100}% p.a.`);
     });
 
   } catch (error) {
-    console.error('❌ Failed to start server:', error);
+    console.error('❌ Startup failed:', error);
     process.exit(1);
   }
 }
 
-// Handle graceful shutdown
-process.on('SIGTERM', async () => {
-  console.log('SIGTERM received. Shutting down gracefully...');
+// Graceful shutdown
+const shutdown = async (signal: string) => {
+  console.log(`\n${signal} received – shutting down...`);
   await redisClient.disconnect();
   await sequelize.close();
   process.exit(0);
-});
+};
 
-process.on('SIGINT', async () => {
-  console.log('SIGINT received. Shutting down gracefully...');
-  await redisClient.disconnect();
-  await sequelize.close();
-  process.exit(0);
-});
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
-// Start the server
 startServer();
 
 export default app;
