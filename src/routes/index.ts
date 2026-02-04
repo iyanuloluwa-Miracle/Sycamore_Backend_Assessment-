@@ -7,7 +7,7 @@ const router = Router();
 
 // Mount routes
 router.use('/transfer', transferRoutes);
-router.use('/wallets', walletRoutes);
+router.use('/wallet', walletRoutes);
 router.use('/interest', interestRoutes);
 
 // Health check
